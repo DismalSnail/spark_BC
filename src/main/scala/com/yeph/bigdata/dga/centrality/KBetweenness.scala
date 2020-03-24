@@ -1,15 +1,17 @@
 package com.yeph.bigdata.dga.centrality
 
+import it.unimi.dsi.fastutil.longs.LongSets
 import org.apache.spark.SparkContext
 import org.apache.spark.graphx.{Graph, VertexId, VertexRDD}
+import org.apache.spark.rdd.RDD
 
 import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import scala.reflect.ClassTag
 
 object KBetweenness {
-  def run[VD: ClassTag](graph: Graph[VD, Double]) = {
-    var graphlets = graph.mapVertices((_, _) => Array[(VertexId, VertexId, Double)]()).cache()
+  def run[VD: ClassTag](graph: Graph[VD, Double]): RDD[((VertexId, VertexId), Double)] = {
+    var graphlets = graph.mapVertices((_, _) => Array[(VertexId, VertexId, Double)]())
     graphlets.vertices.count()
 
     var graphK = graphlets.aggregateMessages[Array[(VertexId, VertexId, Double)]](
@@ -20,7 +22,7 @@ object KBetweenness {
       _ union _
     )
 
-    var graphletsNew = graphlets.joinVertices(graphK)((_, _, newAttr) => newAttr).cache()
+    var graphletsNew = graphlets.joinVertices(graphK)((_, _, newAttr) => newAttr)
 
     graphletsNew.vertices.count()
     graphletsNew.edges.count()
@@ -43,7 +45,7 @@ object KBetweenness {
         a.union(b).distinct
     )
 
-    graphlets = graphletsNew.joinVertices(graphK)((_, oldAttr, newAttr) => oldAttr ++ newAttr).cache()
+    graphlets = graphletsNew.joinVertices(graphK)((_, oldAttr, newAttr) => oldAttr ++ newAttr)
 
     graphlets.vertices.count()
     graphlets.edges.count()
@@ -65,7 +67,7 @@ object KBetweenness {
 
     graphletsNew = graphlets.joinVertices(graphK)((_, oldAttr, newAttr) => oldAttr ++ newAttr)
 
-    val ver = graphletsNew.vertices.cache()
+    val ver: VertexRDD[Array[(VertexId, VertexId, Double)]] = graphletsNew.vertices
     ver.count()
 
     graphK.unpersist(blocking = false)
@@ -73,7 +75,10 @@ object KBetweenness {
     graphlets.edges.unpersist(blocking = false)
     graphletsNew.edges.unpersist(blocking = false)
 
-    ver.mapPartitions(data => {
+//        Thread.sleep(10000000)
+
+    ver.mapPartitions((data: Iterator[(VertexId, Array[(VertexId, VertexId, Double)])]) => {
+
       val S = mutable.Stack[VertexId]()
       val P = new mutable.HashMap[VertexId, ListBuffer[VertexId]]()
       val ord = Ordering.by[(Double, VertexId, VertexId), Double](_._1).reverse
@@ -93,6 +98,8 @@ object KBetweenness {
         val vid = node._1
         var elist: Array[(VertexId, VertexId, Double)] = null
         var vlist: Array[VertexId] = null
+
+        elist = node._2
 
         for (edge <- elist) {
           if (!medBC.contains((edge._1, edge._2))) {
@@ -122,7 +129,7 @@ object KBetweenness {
         Q.enqueue((0.0, vid, vid))
 
         def getDist(v: VertexId, w: VertexId) = {
-          elist.find(e => (e._1 == v && e._2 == 2) || (e._2 == v && e._1 == 2)).get._3
+          elist.find(e => (e._1 == v && e._2 == w) || (e._2 == v && e._1 == w)).get._3
         }
 
         while (Q.nonEmpty) {
@@ -178,7 +185,7 @@ object KBetweenness {
     }).reduceByKey(_ + _)
   }
 
-  def run[VD: ClassTag](sc: SparkContext, number: Long, graph: Graph[VD, Double]) = {
+  def runOne[VD: ClassTag](sc: SparkContext, number: Long, graph: Graph[VD, Double]) = {
     var bGraph = graph.mapVertices((id, _) => if (id == number) true else false)
     var bRDD: VertexRDD[Boolean] = null
     var count = 3
